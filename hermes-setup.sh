@@ -180,7 +180,7 @@ fi
 
 # ---------- служба шлюза ----------------------------------------------------
 say "Устанавливаю и запускаю шлюз Telegram как системную службу"
-hermes gateway install --system
+hermes gateway install --system --run-as-user root
 hermes gateway start --system
 sleep 5
 hermes gateway status --system || true
