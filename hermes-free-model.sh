@@ -56,7 +56,7 @@ def rank(m):
 free.sort(key=rank)
 for m in free:
     ctx = m.get("context_length") or 0
-    print(f"{m[\"id\"]}\t{ctx // 1000}k")
+    print(m["id"] + "\t" + str(ctx // 1000) + "k")
 ')"
 
 [ -n "$RANKED" ] || die "В каталоге нет бесплатных моделей с поддержкой инструментов."
