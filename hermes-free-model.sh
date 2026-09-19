@@ -35,7 +35,9 @@ case "${1:-}" in
 esac
 
 say "Запрашиваю каталог бесплатных моделей OpenRouter"
-CATALOG="$(curl -fsS -m 30 https://openrouter.ai/api/v1/models)" || die "Не удалось получить каталог OpenRouter."
+CATALOG="$(curl -fsS -m 120 --retry 3 --retry-delay 5 --retry-all-errors \
+    https://openrouter.ai/api/v1/models 2>/tmp/openrouter_catalog.err)" \
+    || die "Не удалось получить каталог OpenRouter: $(cat /tmp/openrouter_catalog.err)"
 
 RANKED="$(printf '%s' "$CATALOG" | python3 -c '
 import sys, json
