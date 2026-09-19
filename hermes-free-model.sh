@@ -34,12 +34,18 @@ case "${1:-}" in
     *) MODE="manual"; WANTED="$1" ;;
 esac
 
-say "Запрашиваю каталог бесплатных моделей OpenRouter"
-CATALOG="$(curl -fsS -m 120 --retry 3 --retry-delay 5 --retry-all-errors \
-    https://openrouter.ai/api/v1/models 2>/tmp/openrouter_catalog.err)" \
-    || die "Не удалось получить каталог OpenRouter: $(cat /tmp/openrouter_catalog.err)"
+say "Запрашиваю каталог бесплатных моделей OpenRouter (по IPv4, до 5 минут)"
+CATALOG=""
+if CATALOG="$(curl -4 -fsS -m 300 --retry 2 --retry-delay 5 --retry-all-errors \
+        https://openrouter.ai/api/v1/models 2>/tmp/openrouter_catalog.err)"; then
+    ok "Каталог загружен"
+else
+    printf '  ! Каталог не скачался (%s)\n' "$(tr -d '\n' </tmp/openrouter_catalog.err)"
+    printf '  ! Проверяю известные бесплатные модели поштучно\n'
+fi
 
-RANKED="$(printf '%s' "$CATALOG" | python3 -c '
+rank_catalog() {
+    python3 -c '
 import sys, json
 
 data = json.load(sys.stdin)["data"]
@@ -59,9 +65,56 @@ free.sort(key=rank)
 for m in free:
     ctx = m.get("context_length") or 0
     print(m["id"] + "\t" + str(ctx // 1000) + "k")
-')"
+'
+}
 
-[ -n "$RANKED" ] || die "В каталоге нет бесплатных моделей с поддержкой инструментов."
+# Запасной список: проверяем каждую модель маленьким запросом к OpenRouter,
+# оставляем те, что существуют и поддерживают инструменты.
+CANDIDATES=(
+    deepseek/deepseek-chat-v3.1:free
+    deepseek/deepseek-chat-v3-0324:free
+    deepseek/deepseek-r1-0528:free
+    qwen/qwen3-235b-a22b:free
+    qwen/qwen3-coder:free
+    moonshotai/kimi-k2:free
+    z-ai/glm-4.5-air:free
+    meta-llama/llama-3.3-70b-instruct:free
+    google/gemini-2.0-flash-exp:free
+    mistralai/mistral-small-3.2-24b-instruct:free
+    openai/gpt-oss-120b:free
+)
+
+probe_candidates() {
+    local id info
+    for id in "${CANDIDATES[@]}"; do
+        info="$(curl -4 -fsS -m 25 "https://openrouter.ai/api/v1/models/${id%:free}/endpoints" 2>/dev/null || true)"
+        [ -n "$info" ] || continue
+        printf '%s' "$info" | python3 -c '
+import sys, json
+wanted = sys.argv[1]
+try:
+    d = json.load(sys.stdin)["data"]
+except Exception:
+    sys.exit(1)
+eps = d.get("endpoints") or []
+free = [e for e in eps
+        if float((e.get("pricing") or {}).get("prompt") or 0) == 0
+        and "tools" in (e.get("supported_parameters") or [])]
+if not free:
+    sys.exit(1)
+ctx = max((e.get("context_length") or 0) for e in free)
+print(wanted + "\t" + str(ctx // 1000) + "k")
+' "$id" || true
+    done
+}
+
+if [ -n "$CATALOG" ]; then
+    RANKED="$(printf '%s' "$CATALOG" | rank_catalog)"
+else
+    RANKED="$(probe_candidates)"
+fi
+
+[ -n "$RANKED" ] || die "Не нашёл ни одной бесплатной модели с поддержкой инструментов. Попробуйте позже."
 
 printf '\n  Бесплатные модели с поддержкой инструментов (лучшие сверху):\n'
 printf '%s\n' "$RANKED" | head -12 | awk -F'\t' '{ printf "    %-52s контекст %s\n", $1, $2 }'
