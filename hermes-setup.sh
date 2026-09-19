@@ -19,7 +19,7 @@
 #
 # Дополнительные переменные:
 #   OPENROUTER_API_KEY   ключ OpenRouter вместо Anthropic
-#   HERMES_MODEL         модель, по умолчанию anthropic/claude-sonnet-5
+#   HERMES_MODEL         имя модели; для OpenRouter по умолчанию берётся свежая Claude Sonnet из каталога
 #   HERMES_TIMEZONE      часовой пояс, например Europe/Moscow
 #   SKIP_BROWSER=1       не ставить Chromium (браузерные инструменты работать не будут)
 # ============================================================================
@@ -27,8 +27,8 @@
 set -euo pipefail
 
 INSTALLER_URL="https://hermes-agent.nousresearch.com/install.sh"
-DEFAULT_ANTHROPIC_MODEL="anthropic/claude-sonnet-5"
-DEFAULT_OPENROUTER_MODEL="openrouter/anthropic/claude-sonnet-5"
+DEFAULT_ANTHROPIC_MODEL="claude-sonnet-5"
+DEFAULT_OPENROUTER_MODEL="anthropic/claude-sonnet-4.5"
 
 # ---------- вспомогательные функции ----------------------------------------
 say()  { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
@@ -99,10 +99,26 @@ ask TELEGRAM_ALLOWED_USERS "Ваш Telegram ID (несколько через з
 TELEGRAM_ALLOWED_USERS="${TELEGRAM_ALLOWED_USERS// /}"
 [[ "$TELEGRAM_ALLOWED_USERS" =~ ^[0-9]+(,[0-9]+)*$ ]] || die "Telegram ID должен состоять только из цифр."
 
+# Для OpenRouter спрашиваем у каталога самую свежую модель Claude Sonnet,
+# чтобы не зависеть от точного написания имени.
+pick_openrouter_model() {
+    curl -fsS -m 20 https://openrouter.ai/api/v1/models 2>/dev/null | python3 -c '
+import sys, json
+try:
+    data = json.load(sys.stdin)["data"]
+except Exception:
+    sys.exit(1)
+ms = [m for m in data if m["id"].startswith("anthropic/claude-sonnet") and ":" not in m["id"]]
+ms.sort(key=lambda m: m.get("created", 0), reverse=True)
+print(ms[0]["id"]) if ms else sys.exit(1)
+' 2>/dev/null
+}
+
 if [ "$PROVIDER" = "anthropic" ]; then
     HERMES_MODEL="${HERMES_MODEL:-$DEFAULT_ANTHROPIC_MODEL}"
-else
-    HERMES_MODEL="${HERMES_MODEL:-$DEFAULT_OPENROUTER_MODEL}"
+elif [ -z "${HERMES_MODEL:-}" ]; then
+    HERMES_MODEL="$(pick_openrouter_model || true)"
+    [ -n "$HERMES_MODEL" ] || HERMES_MODEL="$DEFAULT_OPENROUTER_MODEL"
 fi
 
 # ---------- система -----------------------------------------------------------
@@ -171,8 +187,9 @@ fi
 chmod 600 /root/.hermes/.env 2>/dev/null || true
 ok "Ключи сохранены в /root/.hermes/.env"
 
-if hermes config set model "$HERMES_MODEL" >/dev/null 2>&1; then
-    ok "Модель: $HERMES_MODEL"
+if hermes config set model.provider "$PROVIDER" >/dev/null 2>&1 \
+   && hermes config set model.default "$HERMES_MODEL" >/dev/null 2>&1; then
+    ok "Модель: $HERMES_MODEL через $PROVIDER"
 else
     warn "Не удалось выставить модель $HERMES_MODEL автоматически."
     warn "После установки выполните: hermes model"
